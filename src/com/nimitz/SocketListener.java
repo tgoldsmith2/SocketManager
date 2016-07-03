@@ -26,7 +26,7 @@ public class SocketListener implements Runnable {
 			running = false;
 			try {
 				listener.close();
-			} catch(IOException e) { }
+			} catch(IOException e) { e.printStackTrace(); }
 		}
 		
 	}
@@ -52,6 +52,8 @@ public class SocketListener implements Runnable {
 			DataInputStream stream = new DataInputStream(listener.getInputStream());
 			int bytesRead = -1;
 			
+			// TODO, use a better structure instead of concating this string
+			// read method blocks
 			String data = "";
 			while(isRunning() && (bytesRead = stream.read(buffer)) != -1) {
 				

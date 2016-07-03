@@ -18,9 +18,8 @@ import com.nimitz.apex.ApexSocketCommand;
  *  2.  It would be cool if the StateMonitor were more general and just
  *  	reported various information about the socket manager / listener.
  *  		ie, time between successful commands, last command run, current states, etc.
+ *  	subscribers of the statemonitor could use that information to trigger other requests like reconnect or shutdown
  *  
- *  3.  Then we could generalize then create a state handler which would trigger the
- *  	reconnect of the manager based on the status reported by the monitor
  * */
  
 public class SocketManager implements CommandRunner {
@@ -32,7 +31,7 @@ public class SocketManager implements CommandRunner {
 	
 	protected boolean connected;
 	protected Object locker = new Object();
-	protected boolean reconnecting = false;
+	protected volatile boolean reconnecting = false;
 	protected SocketListener listener;
 	protected Thread listenerThread;
 	
@@ -40,6 +39,14 @@ public class SocketManager implements CommandRunner {
 	
 	protected Timer stateMonitorTimer;
 	protected StateMonitor stateMonitor;
+	
+	// these should be made configurable
+	protected static int KEEP_ALIVE_PULSE_PERIOD_IN_MS = 5000;
+	protected static int MONITOR_CHECKER_SCHEDULE_IN_MS = 7500;
+	
+	// this class maintains references to a keep alive pulse and state monitor which 
+	// is attached to that pulse. 
+	// it would be better if these three things were all more detached from the socketmanager.
 	
 	public SocketManager() {
 		
@@ -67,18 +74,22 @@ public class SocketManager implements CommandRunner {
 		
 		try {
 			establishSocket() ;	
-		} catch(Exception e) { }
+		} catch(Exception e) { 
+			// log me
+			e.printStackTrace();
+		}
 		stateMonitor = new StateMonitor(new ErrorHandler());
 			
-		
+
 		listener = new SocketListener();
 		listener.init(socket, getMessageHandler());
 		
 		listenerThread = new Thread(listener);
 		
-		SocketCommand apexCommand = new ApexSocketCommand();
-		apexCommand.setCommand("06zs004D");
-		keepAlive = new SocketKeepAlive(this, apexCommand,5000);
+		SocketCommand apexKeepAliveCommand = new ApexSocketCommand();
+		// get rid of magic strings and make an enum with all various commands
+		apexKeepAliveCommand.setCommand("06zs004D");
+		keepAlive = new SocketKeepAlive(this, apexKeepAliveCommand,KEEP_ALIVE_PULSE_PERIOD_IN_MS);
 		keepAlive.init();
 		try {
 			listenerThread.start();
@@ -86,7 +97,7 @@ public class SocketManager implements CommandRunner {
 			
 			stateMonitorTimer = new Timer();
 			
-			stateMonitorTimer.scheduleAtFixedRate(stateMonitor, 7500, 10000);
+			stateMonitorTimer.scheduleAtFixedRate(stateMonitor, MONITOR_CHECKER_SCHEDULE_IN_MS, MONITOR_CHECKER_SCHEDULE_IN_MS);
 			
 		} catch(Exception e) { 
 			// log me
@@ -112,26 +123,17 @@ public class SocketManager implements CommandRunner {
 		connected = !socket.isClosed();
 	}
 	
-	protected boolean blockReconnect() {
-		
-		synchronized(locker) {
-			
-			if(reconnecting) {
-				try {
-					System.out.println("reconnect blocked");
-					locker.wait();	
-				} catch(InterruptedException e) {
-					// log me
-				}
-				return true;
-			} 
-			return false;
-		}
+	protected boolean isConnecting() {
+		if(reconnecting) {
+			System.out.println("reconnect blocked");
+			return true;
+		} 
+		return false;
 	}
 	
 	public void reconnect() {
 		
-		if(blockReconnect()) {
+		if(isConnecting()) {
 			return;
 		}
 		
@@ -147,7 +149,7 @@ public class SocketManager implements CommandRunner {
 					// we should schedule these re-attempts instead of just looping
 					establishSocket();
 				} catch(IOException e) {
-					// log me
+					// do something about this. if reconnect fails / continues to fail there is an issue
 					e.printStackTrace();
 				}
 			}
@@ -155,13 +157,18 @@ public class SocketManager implements CommandRunner {
 			reconnecting = false;
 			
 			start();
-			locker.notify();
 		}
 	}
 	
 	@Override
 	public void runCommand(SocketCommand command) {
 		if(reconnecting) {
+			// it's possible to build some kind of queue of missed commands. 
+			// at the very least is seams like we should log them
+			// you could queue the commands and replay them after reconnected...
+			// but that could be bad.
+			// Simpler behavior is just to log and drop that command completely
+			// perhaps this method could notify the caller of the commands status instead of returning void
 			return;
 		}
 		synchronized(locker) {

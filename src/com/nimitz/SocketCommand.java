@@ -19,7 +19,6 @@ public abstract class SocketCommand {
 	}
 	
 	public byte[] getCommandBytes() {
-		// can set the command encoding here
 		return command.getBytes(getCharset());
 	}
 }
